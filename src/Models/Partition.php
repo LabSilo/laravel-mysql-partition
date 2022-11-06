@@ -28,9 +28,6 @@ class Partition{
     {
         $this->name = $name;
         $this->type = $type;
-        if ($this->type === 'RANGE' && !is_numeric($value)){
-            throw new UnexpectedValueException('Value for range must be an integer');
-        }
         if ($this->type === 'LIST' && !is_array($value)){
             throw new UnexpectedValueException('Value for list must be an array');
         }
