@@ -16,7 +16,7 @@ class PartitionsCommand extends Command
      */
     protected $signature = 'laravel-mysql-partition
                             {action : Action to perform} 
-                            {--database=} {--table=} {--method=} {--number=} {--excludeFuture} {--column=} {--partitions=*}';
+                            {--database=} {--table=} {--method=} {--number=} {--excludeFuture} {--column=} {--partitions=*} {--timestamp-column}';
 
     /**
      * The console command description.
@@ -88,7 +88,7 @@ class PartitionsCommand extends Command
                     case "YEAR":
                         $this->checkForOptions(['column']);
                         $yearRanges = $this->askforYearRange();
-                        Schema::partitionByYears($this->option('table'), $this->option('column'), $yearRanges[0], $yearRanges[1] ?: date('Y'), $this->option('database'));
+                        Schema::partitionByYears($this->option('table'), $this->option('column'), $yearRanges[0], $yearRanges[1] ?: date('Y'), $this->option('database'), $this->option('timestamp-column'));
                         $this->info('Table did partitioned successfully!');
                         break;
                     case "MONTH":

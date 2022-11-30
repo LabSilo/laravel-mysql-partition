@@ -202,8 +202,10 @@ class Schema extends IlluminateSchema
      * @param $column
      * @param $startYear
      * @param $endYear
+     * @param null $schema
+     * @param bool $timestamp Whether the column is of type TIMESTAMP or not.
      */
-    public static function partitionByYears($table, $column, $startYear, $endYear = null, $schema=null)
+    public static function partitionByYears($table, $column, $startYear, $endYear = null, $schema = null, $timestamp = false)
     {
         $appendSchema = $schema !== null ? ($schema.".") : '';
         $endYear = $endYear ?: date('Y');
@@ -212,9 +214,9 @@ class Schema extends IlluminateSchema
         }
         $partitions = [];
         foreach (range($startYear, $endYear) as $year) {
-            $partitions[] = new Partition('year'.$year, Partition::RANGE_TYPE, $year+1);
+            $partitions[] = new Partition('year'.$year, Partition::RANGE_TYPE, $timestamp === false ? $year+1 : sprintf("UNIX_TIMESTAMP('%s')", sprintf('%s-01-01 00:00:00', $year + 1)));
         }
-        self::partitionByRange($table, "YEAR($column)", $partitions, true, $schema);
+        self::partitionByRange($table, $timestamp === false ? "YEAR($column)" : "UNIX_TIMESTAMP($column)", $partitions, true, $schema);
     }
 
     /**
