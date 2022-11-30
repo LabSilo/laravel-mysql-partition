@@ -138,8 +138,9 @@ class Schema extends IlluminateSchema
      * @param null $endYear
      * @param bool $includeFuturePartition
      * @param null $schema
+     * @param bool $timestamp Whether the column is of type TIMESTAMP or not.
      */
-    public static function partitionByYearsAndMonths($table, $column, $startYear, $endYear = null, $includeFuturePartition = true, $schema=null)
+    public static function partitionByYearsAndMonths($table, $column, $startYear, $endYear = null, $includeFuturePartition = true, $schema=null, $timestamp = false)
     {
         $appendSchema = $schema !== null ? ($schema.".") : '';
         self::assertSupport();
@@ -153,7 +154,8 @@ class Schema extends IlluminateSchema
             $partitions[] = new Partition('year'.$year, Partition::RANGE_TYPE, $year+1);
         }
         // Build query
-        $query = "ALTER TABLE {$appendSchema}{$table} PARTITION BY RANGE(YEAR({$column})) SUBPARTITION BY HASH(MONTH({$column})) ( ";
+        $rangeSelector = $timestamp === false ? "YEAR($column)" : "UNIX_TIMESTAMP($column)";
+        $query = "ALTER TABLE {$appendSchema}{$table} PARTITION BY RANGE($rangeSelector) SUBPARTITION BY HASH(MONTH({$column})) ( ";
         $subPartitionsQuery = collect($partitions)->map(static function($partition) {
             return $partition->toSQL() . "(". collect(self::$month)->map(static function($month) use ($partition){
                 return "SUBPARTITION {$month}".($partition->value-1);
