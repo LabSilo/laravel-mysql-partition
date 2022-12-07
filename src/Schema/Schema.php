@@ -5,6 +5,8 @@ namespace Brokenice\LaravelMysqlPartition\Schema;
 use Brokenice\LaravelMysqlPartition\Exceptions\UnexpectedValueException;
 use Brokenice\LaravelMysqlPartition\Exceptions\UnsupportedPartitionException;
 use Brokenice\LaravelMysqlPartition\Models\Partition;
+use Carbon\Carbon;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema as IlluminateSchema;
 
@@ -32,6 +34,11 @@ class Schema extends IlluminateSchema
         10 => 'oct',
         11 => 'nov'
     ];
+
+    public static function isPostgres(){
+        $driver = config(sprintf('database.connections.%s.driver', DB::getDefaultConnection()));
+        return $driver === 'pgsql';
+    }
 
     /**
      * returns array of partition names for a specific db/table
@@ -63,6 +70,11 @@ class Schema extends IlluminateSchema
      */
     public static function havePartitioning()
     {
+        if (self::isPostgres()){
+            self::$already_checked = true;
+            self::$have_partitioning = true;
+            return self::$have_partitioning;
+        }
         if (self::$already_checked) {
             return self::$have_partitioning;
         }
@@ -70,6 +82,7 @@ class Schema extends IlluminateSchema
         if (version_compare(self::version(), 8, '>=')) {
             self::$have_partitioning = true;
         }
+
         elseif (version_compare(self::version(), 5.6, '>=') && version_compare(self::version(), 8, '<')) {
             // see http://dev.mysql.com/doc/refman/5.6/en/partitioning.html
             $plugins = DB::connection()->getPdo()->query("SHOW PLUGINS")->fetchAll();
@@ -106,6 +119,38 @@ class Schema extends IlluminateSchema
     }
 
     /**
+     * Creates a partitioned table, ONLY for Postgresql.
+     *
+     * @param string $table The table name to create.
+     * @param string $column The column that is going to be used for partitioning.
+     * @param string $type The type of column that is used for partitioning. e.g. timestamp
+     * @param string $partitionType The partitioning type. HASH, LIST or RANGE.
+     * @param bool $nullable Whether the column has to be nullable or not.
+     * @return void
+     */
+    public static function createPartitionedTable($table, $column, $type, $partitionType = 'RANGE', $nullable = false){
+        if (!self::isPostgres()){
+            return;
+        }
+        $nullableStatement = '';
+        if ($nullable === false){
+            $nullableStatement = ' NOT NULL ';
+        }
+
+        DB::unprepared(
+            sprintf(
+                'CREATE TABLE %s (%s %s%s) PARTITION BY %s (%s);',
+                $table,
+                $column,
+                $type,
+                $nullableStatement,
+                $partitionType,
+                $column
+            )
+        );
+    }
+
+    /**
      * @param $table
      * @param $column
      * @param null $schema
@@ -132,6 +177,8 @@ class Schema extends IlluminateSchema
     }
 
     /**
+     * Partition table by years and months, Supports Postgresql.
+     *
      * @param $table
      * @param $column
      * @param $startYear
@@ -143,10 +190,24 @@ class Schema extends IlluminateSchema
     public static function partitionByYearsAndMonths($table, $column, $startYear, $endYear = null, $includeFuturePartition = true, $schema=null, $timestamp = false)
     {
         $appendSchema = $schema !== null ? ($schema.".") : '';
+        $isPostgres = self::isPostgres();
         self::assertSupport();
         $endYear = $endYear ?: date('Y');
         if ($startYear > $endYear){
             throw new UnexpectedValueException("$startYear must be lower than $endYear");
+        }
+
+        if ($isPostgres){
+            foreach (range($startYear, $endYear) as $year) {
+                for ($monthCounter = 1; $monthCounter < 13; $monthCounter++) {
+                    $partitionName = sprintf('%s_%s%d', $table, self::$month[$monthCounter], $year);
+                    $dateObj = Carbon::create($year, $monthCounter, 1);
+                    $dateObjMonthAdded = Carbon::create($year, $monthCounter, 1)->addMonth();
+                    $query = sprintf("CREATE TABLE %s PARTITION OF %s FOR VALUES FROM ('%04d-%02d-%02d') TO ('%04d-%02d-%02d');", $partitionName, $table, $dateObj->year, $dateObj->month, $dateObj->day, $dateObjMonthAdded->year, $dateObjMonthAdded->month, $dateObjMonthAdded->day);
+                    DB::unprepared(DB::raw($query));
+                }
+            }
+            return;
         }
         // Build partitions array for years range
         $partitions = [];
@@ -154,12 +215,13 @@ class Schema extends IlluminateSchema
             $partitions[] = new Partition('year'.$year, Partition::RANGE_TYPE, $year+1);
         }
         // Build query
+
         $rangeSelector = $timestamp === false ? "YEAR($column)" : "UNIX_TIMESTAMP($column)";
         $query = "ALTER TABLE {$appendSchema}{$table} PARTITION BY RANGE($rangeSelector) SUBPARTITION BY HASH(MONTH({$column})) ( ";
         $subPartitionsQuery = collect($partitions)->map(static function($partition) {
             return $partition->toSQL() . "(". collect(self::$month)->map(static function($month) use ($partition){
-                return "SUBPARTITION {$month}".($partition->value-1);
-            })->implode(', ') . ' )';
+                    return "SUBPARTITION {$month}".($partition->value-1);
+                })->implode(', ') . ' )';
         });
         $query .= collect($subPartitionsQuery)->implode(',');
         // Include future partitions if needed
@@ -200,6 +262,7 @@ class Schema extends IlluminateSchema
     }
 
     /**
+     * Partition table by year, Supports Postgresql.
      * @param $table
      * @param $column
      * @param $startYear
@@ -213,6 +276,16 @@ class Schema extends IlluminateSchema
         $endYear = $endYear ?: date('Y');
         if ($startYear > $endYear){
             throw new UnexpectedValueException("$startYear must be lower than $endYear");
+        }
+        if (self::isPostgres()){
+            foreach (range($startYear, $endYear) as $year) {
+                $partitionName = sprintf('%s_%d', $table, $year);
+                $dateObj = Carbon::create($year);
+                $dateObjYearAdded = Carbon::create($year)->addYear();
+                $query = sprintf("CREATE TABLE %s PARTITION OF %s FOR VALUES FROM ('%04d-%02d-%02d') TO ('%04d-%02d-%02d');", $partitionName, $table, $dateObj->year, $dateObj->month, $dateObj->day, $dateObjYearAdded->year, $dateObjYearAdded->month, $dateObjYearAdded->day);
+                DB::unprepared(DB::raw($query));
+            }
+            return;
         }
         $partitions = [];
         foreach (range($startYear, $endYear) as $year) {
@@ -289,12 +362,20 @@ class Schema extends IlluminateSchema
     }
 
     /**
-     * Force field to be autoIncrement
+     * Force field to be autoIncrement, Supports Postgresql.
      * @param $table
      * @param string $field
+     * @param string $type
      */
     public static function forceAutoIncrement($table, $field = 'id', $type='INTEGER')
     {
+        if (self::isPostgres()){
+            DB::statement(sprintf('CREATE SEQUENCE IF NOT EXISTS %s_%s_seq;', $table, $field));
+            DB::statement(sprintf("SELECT SETVAL('%s_%s_seq', (SELECT max(%s) FROM %s));", $table, $field, $field, $table));
+            DB::statement(sprintf("ALTER TABLE %s ALTER COLUMN %s SET DEFAULT nextval('%s_%s_seq'::regclass);", $table, $field, $table, $field));
+            DB::statement(sprintf("ALTER SEQUENCE %s_%s_seq OWNED BY %s.%s;", $table, $field, $table, $field));
+            return;
+        }
         DB::statement("ALTER TABLE {$table} MODIFY {$field} {$type} NOT NULL AUTO_INCREMENT");
     }
 
